@@ -33,3 +33,4 @@ go.work.sum
 **/wsh
 bin/
 **/example-*.json
+**/__debug_bin*
