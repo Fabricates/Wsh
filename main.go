@@ -42,7 +42,7 @@ func init() {
 	flag.StringVar(&dataTmplStr, "data", `{{.data}}`, "Downstream data field")
 	flag.StringVar(&resizeTmplStr, "resize", `{"operation":"resize","rows":{{.rows}},"cols":{{.cols}}}`, "Resize window template")
 	flag.StringVar(&newline, "newline", `\r`, "New line separator")
-	flag.StringVar(&eof, "eof", `/app #`, "EOF of the response message")
+	flag.StringVar(&eof, "eof", `/app # `, "EOF of the response message")
 	flag.IntVar(&maxSize, "max", 4159, "Maximum payload size per message (bytes)")
 }
 
@@ -103,7 +103,7 @@ func main() {
 			continue
 		}
 		// normal send
-		if err := send([]byte(line+"\r"), conn); err != nil {
+		if err := send([]byte(line+newline), conn); err != nil {
 			fmt.Printf("\nsend error: %v\n%s", err, eof)
 			continue
 		}
@@ -225,14 +225,14 @@ func download(local, remote string, conn *websocket.Conn) error {
 
 	done := false
 	r, w := io.Pipe()
-	
+
 	// Run io.Copy in a goroutine so it doesn't block the message reading loop
 	copyDone := make(chan error, 1)
 	go func() {
 		_, copyErr := io.Copy(f, base64.NewDecoder(base64.StdEncoding, r))
 		copyDone <- copyErr
 	}()
-	
+
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
@@ -262,6 +262,7 @@ func download(local, remote string, conn *websocket.Conn) error {
 }
 
 func processIncoming(conn *websocket.Conn) {
+	sb := strings.Builder{}
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
@@ -279,8 +280,9 @@ func processIncoming(conn *websocket.Conn) {
 		}
 		// Extract data from downstream template
 		line := string(extract(msg))
+		sb.WriteString(line)
 		fmt.Print(line)
-		if strings.HasSuffix(line, eof) {
+		if s := sb.String(); strings.HasSuffix(s, eof) && sb.Len() > eofLen {
 			break
 		}
 	}
