@@ -11,7 +11,15 @@ jobs:
     strategy:
       matrix:
         go-version: [1.20, 1.21]
-        os-arch: [linux-amd64, linux-arm64, windows-amd64, macos-amd64]
+        include:
+          - os: linux
+            arch: amd64
+          - os: linux
+            arch: arm64
+          - os: windows
+            arch: amd64
+          - os: macos
+            arch: amd64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,8 +41,8 @@ jobs:
 
       - name: Build
         env:
-          GOOS: ${{ matrix.os-arch.split('-')[0] }}
-          GOARCH: ${{ matrix.os-arch.split('-')[1] }}
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
         run: |
           echo "Building for ${GOOS}/${GOARCH}"
           mkdir -p out
@@ -45,8 +53,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wsh-${{ matrix.os-arch }}-go${{ matrix.go-version }}
-          path: out/${{ matrix.os-arch }}/
+          name: wsh-${{ matrix.os }}-${{ matrix.arch }}-go${{ matrix.go-version }}
+          path: out/${{ matrix.os }}-${{ matrix.arch }}/
 
   release:
     runs-on: ubuntu-latest
