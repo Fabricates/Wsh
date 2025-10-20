@@ -1,3 +1,4 @@
+// Package main implement a websocket-based shell client
 package main
 
 import (
@@ -13,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"text/template"
@@ -27,18 +29,16 @@ var (
 	uploadTmpl *template.Template
 	dataTmpl   *template.Template
 	// resizeTmpl    *template.Template
-	uploadEmpty   string
-	uploadTmplStr string
-	dataTmplStr   string
-	resizeTmplStr string
-	newline       string
-	ps1           string = "\x1b[?2004h> "
-	ps1Len        int
-	skipLines     map[string]bool = map[string]bool{
-		"\r\n\x1b[?2004l\r": true,
-		"\x1b[?2004l\r":     true,
-		"\x1b[?2004h":       true,
-	}
+	uploadEmpty         string
+	uploadTmplStr       string
+	dataTmplStr         string
+	resizeTmplStr       string
+	newline             string
+	ps1                 = "> "
+	debug               bool
+	escape              = regexp.MustCompile("\x1b\\[([0-9]+;)?[0-9]*[a-zA-Z]")
+	escapes             = func(raw []byte) string { return string(escape.ReplaceAll(raw, []byte{})) }
+	maxLineBufferLength = 1024
 )
 
 func init() {
@@ -48,6 +48,7 @@ func init() {
 	flag.StringVar(&resizeTmplStr, "resize", `{"operation":"resize","rows":{{.rows}},"cols":{{.cols}}}`, "Resize window template")
 	flag.StringVar(&newline, "newline", "\r", "New line separator")
 	flag.IntVar(&maxSize, "max", 4159, "Maximum payload size per message (bytes)")
+	flag.BoolVar(&debug, "debug", false, "Enable debug output")
 }
 
 func parse(t *template.Template, ctx any) []byte {
@@ -76,17 +77,17 @@ func main() {
 
 	uploadEmpty = string(parse(uploadTmpl, map[string]any{"data": ""}))
 
-	ps1Len = len(ps1)
-
 	// dial websocket
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
-	conn, _, err := dialer.Dial(urlStr, nil)
+	connection, _, err := dialer.Dial(urlStr, nil)
 	if err != nil {
 		log.Fatalf("dial ws: %v", err)
 	}
-	defer conn.Close()
+	defer connection.Close()
 
-	fmt.Printf("[connected]\n%s", ps1)
+	conn := &session{connection}
+
+	fmt.Printf("[connected]")
 
 	// handle interrupts
 	ints := make(chan os.Signal, 1)
@@ -94,12 +95,14 @@ func main() {
 	go func() {
 		<-ints
 		fmt.Printf("\nclosing")
-		conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+		conn.Send(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 		os.Exit(0)
 	}()
 
 	// change PS1
-	process("export PS1='> ';unset LS_COLORS; export TERM=xterm-mono", conn)
+	if err = process(fmt.Sprintf("export PS1='%s';unset LS_COLORS; export TERM=xterm-mono", ps1), conn); err != nil {
+		panic(err)
+	}
 
 	// stdin loop: accepts commands starting with '/' or sends content as data
 	s := bufio.NewScanner(os.Stdin)
@@ -107,6 +110,7 @@ func main() {
 		line := s.Text()
 		if strings.HasPrefix(line, "/") {
 			command(line, conn)
+			fmt.Printf("\r\n%s", ps1)
 			continue
 		}
 		// normal send
@@ -120,38 +124,26 @@ func main() {
 	}
 }
 
-func command(line string, conn *websocket.Conn) {
+func command(line string, conn *session) {
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
 		return
 	}
 	switch parts[0] {
-	case "/upload":
+	case "/get":
 		if len(parts) < 3 {
-			fmt.Println("usage: /upload <localpath> <remotepath>")
-			return
-		}
-		local := parts[1]
-		remote := parts[2]
-		if err := upload(local, remote, conn); err != nil {
-			fmt.Printf("upload failed: %v\n", err)
-		} else {
-			fmt.Printf("upload queued: %s -> %s\n", local, remote)
-		}
-	case "/download":
-		if len(parts) < 3 {
-			fmt.Println("usage: /download <localpath> <remotepath>")
+			fmt.Println("usage: /get <localpath> <remotepath>")
 			return
 		}
 		local := parts[1]
 		remote := parts[2]
 		if err := download(local, remote, conn); err != nil {
-			fmt.Printf("download failed: %v\n%s", err, ps1)
+			fmt.Printf("download failed: %v\n", err)
 		} else {
-			fmt.Printf("download requested: %s <- %s\n%s", local, remote, ps1)
+			fmt.Printf("download requested: %s <- %s\n", local, remote)
 		}
 	case "/quit", "/exit":
-		conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+		conn.Send(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 		os.Exit(0)
 	default:
 		// send unknown commands to remote as data (strip leading '/')
@@ -162,49 +154,7 @@ func command(line string, conn *websocket.Conn) {
 	}
 }
 
-func upload(local, remote string, conn *websocket.Conn) error {
-	// Step 1: read file
-	b, err := os.ReadFile(local)
-	if err != nil {
-		return err
-	}
-
-	// Step 2: encode to base64
-	enc := base64.StdEncoding.EncodeToString(b)
-
-	// Step 3: write temp .b64 file
-	b64Path := remote + ".b64"
-
-	// Step 4: split base64 content into chunks and send each via template
-	overhead := len(uploadEmpty)
-	allowed := maxSize - overhead
-	if allowed <= 0 {
-		return errors.New("max size too small for template overhead")
-	}
-
-	// Send chunks
-	for i := 0; i < len(enc); i += allowed {
-		end := i + allowed
-		if end > len(enc) {
-			end = len(enc)
-		}
-		chunk := enc[i:end]
-		msg := parse(uploadTmpl, map[string]any{"data": chunk})
-		if err := conn.WriteMessage(websocket.TextMessage, []byte(msg)); err != nil {
-			return fmt.Errorf("failed to send chunk: %w", err)
-		}
-	}
-
-	// Step 5: send decode command to decode base64 file to target and remove temp file
-	decodeCmd := fmt.Sprintf("base64 -d %s > %s && rm %s", b64Path, remote, b64Path)
-	if err := process(decodeCmd, conn); err != nil {
-		return fmt.Errorf("failed to send decode command: %w", err)
-	}
-
-	return nil
-}
-
-func download(local, remote string, conn *websocket.Conn) error {
+func download(local, remote string, conn *session) error {
 	i := strings.LastIndex(local, string(os.PathSeparator))
 	if i > 0 {
 		if err := os.MkdirAll(local[:i], os.ModePerm); err != nil {
@@ -239,55 +189,62 @@ func download(local, remote string, conn *websocket.Conn) error {
 		}
 	}()
 
+	defer w.Close()
+
 	echo := true
+	output := ""
 	for {
-		_, msg, err := conn.ReadMessage()
+		_, msg, err := conn.Read()
 		if err != nil {
 			fmt.Printf("\nread error: %v\n%s", err, ps1)
 			return nil
 		}
 
-		msg = extract(msg)
-		line := string(msg)
-		if echo && strings.HasPrefix(line, cmd) {
-			echo = false
-			continue
+		text := escapes(extract(msg))
+		lines := strings.Split(strings.Trim(text, "\r\n"), "\r\n")
+		fl := lines[0]
+		output += fl
+		sl, el := 0, len(lines)
+		if echo {
+			sl++
+			if strings.HasSuffix(output, cmd) {
+				echo = false
+			}
 		}
-
-		if _, ok := skipLines[line]; ok {
-			continue
-		}
-
-		if line == "> " || line == ps1 {
+		payload := ""
+		if strings.HasSuffix(output, ps1) {
+			text = strings.Trim(text[:len(text)-len(ps1)], "\r\n")
+			if len(text) > 0 {
+				payload = text
+			}
 			done = true
-			msg = msg[:0]
-		} else if l := len(msg); l > len(ps1) && strings.HasSuffix(line, ps1) {
-			msg = msg[:l-ps1Len]
-			done = true
+		} else if sl == 0 || len(strings.Trim(text, "\r\n")) > len(fl) {
+			payload = strings.Join(lines[sl:el], "\r\n")
 		}
 
-		if _, err = w.Write(msg); err != nil {
+		if _, err = w.Write([]byte(payload)); err != nil {
 			fmt.Printf("\nwrite error: %v\n%s", err, ps1)
-			fmt.Println(line)
+			fmt.Println(text)
 		}
 
 		if done {
-			w.Close() // Close the pipe writer to signal EOF to the decoder
 			break
+		}
+		if len(output) > maxLineBufferLength {
+			output = string(output[len(output)-maxLineBufferLength:])
 		}
 	}
 	return nil
 }
 
-func process(prompt string, conn *websocket.Conn) error {
+func process(prompt string, conn *session) error {
 	if err := sendWithTemplate(prompt, conn); err != nil {
 		return err
 	}
 
-	echo := false
-	sb := strings.Builder{}
+	echo, output := true, ""
 	for {
-		_, msg, err := conn.ReadMessage()
+		_, msg, err := conn.Read()
 		if err != nil {
 			// Check if it's a timeout or normal closure
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
@@ -302,15 +259,27 @@ func process(prompt string, conn *websocket.Conn) error {
 			return err
 		}
 		// Extract data from downstream template
-		line := string(extract(msg))
-		if !echo && len(prompt) > 0 && strings.HasPrefix(line, prompt) {
-			echo = true
-			continue
+		text := strings.Trim(escapes(extract(msg)), "\r\n")
+		lines := strings.Split(text, "\r\n")
+		fl := lines[0]
+		sl, el := 0, len(lines)
+		output += fl
+		if echo {
+			sl++
+			if strings.HasSuffix(output, prompt) {
+				echo = false
+			}
 		}
-		sb.WriteString(line)
-		fmt.Print(line)
-		if s := sb.String(); sb.Len() > ps1Len && strings.HasSuffix(s, ps1) {
+		if strings.HasSuffix(text, ps1) {
+			el--
+			if sl < el {
+				fmt.Print(strings.Join(lines[sl:el], "\r\n") + "\r\n" + ps1)
+			} else {
+				fmt.Printf("\r\n%s", ps1)
+			}
 			break
+		} else if sl == 0 || len(strings.Trim(text, "\r\n")) > len(fl) {
+			fmt.Print(strings.Join(lines[sl:el], "\r\n"))
 		}
 	}
 	return nil
@@ -329,11 +298,11 @@ func extract(msg []byte) []byte {
 	return parse(dataTmpl, j)
 }
 
-func sendWithTemplate(data string, conn *websocket.Conn) error {
+func sendWithTemplate(data string, conn *session) error {
 	// simple replace
 	msg := parse(uploadTmpl, map[string]any{"data": data + ternary(newline == "\r", "\\r", "\\n")})
 	if len(msg) <= maxSize {
-		return conn.WriteMessage(websocket.TextMessage, []byte(msg))
+		return conn.Send(websocket.TextMessage, []byte(msg))
 	}
 
 	// chunk the data itself if tpl contains single $ occurrence
@@ -350,7 +319,7 @@ func sendWithTemplate(data string, conn *websocket.Conn) error {
 		}
 		chunk := raw[i:end]
 		m := parse(uploadTmpl, map[string]any{"data": chunk})
-		if err := conn.WriteMessage(websocket.TextMessage, []byte(m)); err != nil {
+		if err := conn.Send(websocket.TextMessage, []byte(m)); err != nil {
 			return err
 		}
 	}
@@ -362,4 +331,21 @@ func ternary[T any](cond bool, a, b T) T {
 		return a
 	}
 	return b
+}
+
+type session struct {
+	conn *websocket.Conn
+}
+
+func (c session) Read() (t int, m []byte, e error) {
+	defer func() {
+		if debug {
+			fmt.Println(t, string(m), e)
+		}
+	}()
+	return c.conn.ReadMessage()
+}
+
+func (c session) Send(messageType int, data []byte) error {
+	return c.conn.WriteMessage(messageType, data)
 }
