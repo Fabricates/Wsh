@@ -10,14 +10,23 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: [1.22]
         include:
-          - os: linux
+          - go-version: "1.22"
+            os: linux
             arch: amd64
-          - os: linux
+            runner: ubuntu-latest
+          - go-version: "1.22"
+            os: linux
             arch: arm64
-          - os: windows
+            runner: ubuntu-latest
+          - go-version: "1.22"
+            os: windows
             arch: amd64
+            runner: windows-latest
+          - go-version: "1.22"
+            os: darwin
+            arch: amd64
+            runner: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,25 +53,19 @@ jobs:
         run: |
           echo "Building for ${GOOS}/${GOARCH}"
           mkdir -p out
-          outname=wsh
-          if [ "${GOOS}" = "windows" ]; then outname=wsh.exe; fi
-          go build -o out/${GOOS}-${GOARCH}/${outname} ./
+          outname=wsh-${GOOS}-${GOARCH}
+          go build -o out/${outname} ./
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: wsh-${{ matrix.os }}-${{ matrix.arch }}-go${{ matrix.go-version }}
-          path: out/${{ matrix.os }}-${{ matrix.arch }}/
+          path: out/wsh-${{ matrix.os }}-${{ matrix.arch }}
 
   release:
     runs-on: ubuntu-latest
     needs: build
     steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-artifacts
-
       - name: Create or update nightly release
         id: release
         uses: ncipollo/release-action@v1
@@ -72,13 +75,34 @@ jobs:
           body: |
             Nightly rolling release - generated on $(date -u)
           draft: false
-          prerelease: false
-          overwrite: true
+          prerelease: true
+          allowUpdates: true
+
+      - name: Checkout repository to create tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create or update 'nightly' tag and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Point the nightly tag at the current HEAD and push
+          git tag -f nightly HEAD
+          git push --force origin refs/tags/nightly
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
-          files: release-artifacts/**
+          files: |
+            ./wsh-*/wsh-*
+          tag_name: nightly
+          overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
