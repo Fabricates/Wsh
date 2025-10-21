@@ -1,4 +1,4 @@
-module github.com/fabricates/wsh
+module github.com/fabricates/tcsh
 
 go 1.20
 

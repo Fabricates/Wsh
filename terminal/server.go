@@ -128,7 +128,7 @@ func main() {
 	http.HandleFunc("/ws", handleWebSocket)
 
 	log.Printf("WebSocket bash server starting on %s", addr)
-	log.Printf("Connect with: wsh -url ws://localhost%s/ws", addr)
+	log.Printf("Connect with: tcsh -url ws://localhost%s/ws", addr)
 
 	if err := http.ListenAndServe(addr, nil); err != nil {
 		log.Fatal("ListenAndServe: ", err)

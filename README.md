@@ -1,11 +1,6 @@
-wsh - WebSocket remote shell
+# tcsh - WebSocket remote shell
 
-This tool connects to a WebSocket endpoint and forwards local stdin to the remote and prints remote messages to stdout.
-
-```markdown
-# wsh - WebSocket remote shell
-
-wsh is a small CLI that connects to a WebSocket endpoint and forwards local stdin to the remote while printing remote output to stdout.
+tcsh is a small CLI that connects to a WebSocket endpoint and forwards local stdin to the remote while printing remote output to stdout.
 
 Key points (as implemented in `main.go`):
 
@@ -52,7 +47,7 @@ Examples
 --------
 Connect and use defaults:
 
-  wsh -url ws://example.com/ws
+  tcsh -url ws://example.com/ws
 
 Request a download from the remote and save to `./out.bin`:
 
@@ -64,7 +59,7 @@ Send an arbitrary command to the remote (commands beginning with `/` are forward
 
 Send raw input (not a slash command). The line will be wrapped by the upstream template and sent:
 
-  echo "hello" | wsh -url ws://example.com/ws
+  echo "hello" | tcsh -url ws://example.com/ws
 
 Flags
 -----
@@ -87,5 +82,3 @@ go build ./...
 Notes
 -----
 - The README documents the behavior of the current `main.go`. If you need an `/upload` command or different remote-side helpers, we can add symmetric upload support that encodes local files to base64, splits chunks into `data` fields and sends a final decode command to the remote (the codebase already contains the basic chunking helpers to make that straightforward).
-
-```

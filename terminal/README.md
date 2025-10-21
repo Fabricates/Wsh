@@ -1,13 +1,13 @@
 # Terminal WebSocket Server
 
-A simple WebSocket server for testing `wsh`. Each WebSocket connection spawns a bash session, forwarding input/output between the WebSocket client and the bash process.
+A simple WebSocket server for testing `tcsh`. Each WebSocket connection spawns a bash session, forwarding input/output between the WebSocket client and the bash process.
 
 ## Features
 
 - Each WebSocket connection gets its own isolated bash session
 - Bidirectional communication: WebSocket messages → bash stdin, bash stdout/stderr → WebSocket messages
 - Uses pseudo-terminal (PTY) for proper bash interaction
-- Compatible with `wsh` client message format
+- Compatible with `tcsh` client message format
 
 ## Usage
 
@@ -29,7 +29,7 @@ Or specify a custom address:
 go run terminal/server.go -addr :9000
 ```
 
-Connect with `wsh`:
+Connect with `tcsh`:
 
 ```bash
 go run main.go -url ws://localhost:8080/ws
@@ -56,7 +56,7 @@ The server expects and sends JSON messages with the following format:
    go run terminal/server.go
    ```
 
-2. In another terminal, connect with wsh:
+2. In another terminal, connect with tcsh:
    ```bash
    go run main.go -url ws://localhost:8080/ws
    ```

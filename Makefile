@@ -1,9 +1,9 @@
-# Makefile for wsh - WebSocket Shell
+# Makefile for tcsh - WebSocket Shell
 # Cross-platform build targets for Linux, macOS, and Windows
 
 # Binary name
-BINARY_NAME=wsh
-MODULE_NAME=github.com/fabricates/wsh
+BINARY_NAME=tcsh
+MODULE_NAME=github.com/fabricates/tcsh
 
 # Version (can be overridden: make VERSION=1.0.0)
 VERSION?=dev
